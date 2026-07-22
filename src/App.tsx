@@ -44,6 +44,9 @@ function ClientRoute({ projectId }: { projectId: string }) {
         </div>
         <MonthNav month={month} setMonth={setMonth} />
       </div>
+      {api.error && (
+        <div className="banner" style={{ background: '#fdeee9', borderColor: '#e6cfc7', color: '#c0392b' }}>{api.error}</div>
+      )}
       {api.loading ? (
         <div className="card"><div className="empty">読み込み中…</div></div>
       ) : !api.exists ? (
@@ -118,6 +121,9 @@ function AdminRoute({ projectId, onSignOut }: { projectId: string; onSignOut: ()
           </button>
         </div>
       </div>
+      {api.error && (
+        <div className="banner" style={{ background: '#fdeee9', borderColor: '#e6cfc7', color: '#c0392b' }}>{api.error}</div>
+      )}
       {api.loading ? (
         <div className="card"><div className="empty">読み込み中…</div></div>
       ) : !api.exists ? (

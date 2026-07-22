@@ -19,6 +19,16 @@ import { auth, db } from './firebase';
 import { uid } from './util';
 import type { PlannedWork, Project, TimeEntry, WorkKind, WorkType } from './types';
 
+/** Firebaseエラーを日本語メッセージに */
+function fbErr(e: unknown): string {
+  const code = (e as { code?: string })?.code ?? '';
+  if (code.includes('permission-denied'))
+    return 'Firestore のルールで拒否されました。コンソールの Firestore「ルール」を公開（設定）してください。';
+  if (code.includes('unavailable') || code.includes('network'))
+    return '通信に失敗しました。ネットワーク環境をご確認ください。';
+  return 'エラー: ' + ((e as Error)?.message ?? String(e));
+}
+
 /* ============ 認証（オーナーのみ書き込み） ============ */
 
 export interface AuthApi {
@@ -71,6 +81,7 @@ function defaultWorkTypes(projectId: string): WorkType[] {
 export interface ProjectListApi {
   projects: Project[];
   loading: boolean;
+  error: string;
   createProject: (name: string) => Promise<string>;
   deleteProject: (id: string) => Promise<void>;
 }
@@ -78,34 +89,55 @@ export interface ProjectListApi {
 export function useProjectList(enabled: boolean): ProjectListApi {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     if (!enabled) return;
-    const unsub = onSnapshot(query(collection(db, 'projects')), (snap) => {
-      const list = snap.docs
-        .map((d) => ({ id: d.id, name: d.data().name as string, createdAt: d.data().createdAt as number }))
-        .sort((a, b) => a.createdAt - b.createdAt);
-      setProjects(list);
-      setLoading(false);
-    });
+    const unsub = onSnapshot(
+      query(collection(db, 'projects')),
+      (snap) => {
+        const list = snap.docs
+          .map((d) => ({ id: d.id, name: d.data().name as string, createdAt: d.data().createdAt as number }))
+          .sort((a, b) => a.createdAt - b.createdAt);
+        setProjects(list);
+        setLoading(false);
+        setError('');
+      },
+      (err) => {
+        setError(fbErr(err));
+        setLoading(false);
+      },
+    );
     return unsub;
   }, [enabled]);
 
   const createProject = useCallback(async (name: string) => {
     const id = uid();
-    await setDoc(doc(db, 'projects', id), {
-      name: name.trim() || '無題プロジェクト',
-      createdAt: Date.now(),
-      workTypes: defaultWorkTypes(id),
-      entries: [],
-      plans: [],
-    });
+    try {
+      await setDoc(doc(db, 'projects', id), {
+        name: name.trim() || '無題プロジェクト',
+        createdAt: Date.now(),
+        workTypes: defaultWorkTypes(id),
+        entries: [],
+        plans: [],
+      });
+      setError('');
+    } catch (e) {
+      setError(fbErr(e));
+      throw e;
+    }
     return id;
   }, []);
 
-  const deleteProject = useCallback((id: string) => deleteDoc(doc(db, 'projects', id)), []);
+  const deleteProject = useCallback(async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'projects', id));
+    } catch (e) {
+      setError(fbErr(e));
+    }
+  }, []);
 
-  return { projects, loading, createProject, deleteProject };
+  return { projects, loading, error, createProject, deleteProject };
 }
 
 /* ============ 単一プロジェクト（リアルタイム同期＋アクション） ============ */
@@ -123,6 +155,7 @@ export interface StoreApi {
   store: { projects: Project[]; workTypes: WorkType[]; entries: TimeEntry[]; plans: PlannedWork[] };
   loading: boolean;
   exists: boolean;
+  error: string;
   addWorkType: (projectId: string, name: string, kind: WorkKind) => void;
   setRate: (workTypeId: string, rate: number) => void;
   deleteWorkType: (id: string) => void;
@@ -141,6 +174,7 @@ export function useProjectStore(projectId: string): StoreApi {
   const [data, setData] = useState<ProjectDoc | null>(null);
   const [loading, setLoading] = useState(true);
   const [exists, setExists] = useState(true);
+  const [error, setError] = useState('');
   const dataRef = useRef<ProjectDoc | null>(null);
   dataRef.current = data;
 
@@ -165,15 +199,19 @@ export function useProjectStore(projectId: string): StoreApi {
           setExists(false);
         }
         setLoading(false);
+        setError('');
       },
-      () => setLoading(false),
+      (err) => {
+        setError(fbErr(err));
+        setLoading(false);
+      },
     );
     return unsub;
   }, [projectId]);
 
   const ref = doc(db, 'projects', projectId);
   const patch = (fields: Partial<ProjectDoc>) => {
-    void updateDoc(ref, fields as Record<string, unknown>);
+    updateDoc(ref, fields as Record<string, unknown>).catch((e) => setError(fbErr(e)));
   };
 
   const addWorkType = useCallback((_pid: string, name: string, kind: WorkKind) => {
@@ -264,6 +302,7 @@ export function useProjectStore(projectId: string): StoreApi {
     store,
     loading,
     exists,
+    error,
     addWorkType,
     setRate,
     deleteWorkType,

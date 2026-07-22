@@ -6,7 +6,7 @@ import { useProjectList } from '../store';
 import { onEnter, viewUrl } from '../util';
 
 export function ProjectHome() {
-  const { projects, loading, createProject, deleteProject } = useProjectList(true);
+  const { projects, loading, error, createProject, deleteProject } = useProjectList(true);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -33,6 +33,11 @@ export function ProjectHome() {
 
   return (
     <>
+      {error && (
+        <div className="banner" style={{ background: '#fdeee9', borderColor: '#e6cfc7', color: '#c0392b' }}>
+          {error}
+        </div>
+      )}
       <div className="card">
         <h2>プロジェクトを追加</h2>
         <div className="formrow">
