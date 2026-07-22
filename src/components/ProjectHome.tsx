@@ -1,18 +1,24 @@
-// トップ：プロジェクト一覧・作成（管理者のみアクセス想定）
+// トップ：プロジェクト一覧・作成（オーナー・要ログイン）
 // 各プロジェクトは target=_blank で新規タブに開く（管理ビュー）。共有URLはコピー可。
 
 import { useState } from 'react';
-import type { StoreApi } from '../store';
+import { useProjectList } from '../store';
 import { onEnter, viewUrl } from '../util';
 
-export function ProjectHome({ api }: { api: StoreApi }) {
+export function ProjectHome() {
+  const { projects, loading, createProject, deleteProject } = useProjectList(true);
   const [name, setName] = useState('');
-  const { projects } = api.store;
+  const [busy, setBusy] = useState(false);
 
-  const create = () => {
-    if (!name.trim()) return;
-    api.createProject(name);
-    setName('');
+  const create = async () => {
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    try {
+      await createProject(name);
+      setName('');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const copyClientUrl = async (id: string) => {
@@ -40,8 +46,8 @@ export function ProjectHome({ api }: { api: StoreApi }) {
               onKeyDown={onEnter(create)}
             />
           </div>
-          <button className="btn primary" onClick={create}>
-            作成
+          <button className="btn primary" onClick={create} disabled={busy}>
+            {busy ? '作成中…' : '作成'}
           </button>
         </div>
         <div className="hint">※ 日本語変換の確定Enterでは送信されません。追加は「作成」ボタン、または変換確定後にもう一度Enterで行えます。</div>
@@ -51,7 +57,8 @@ export function ProjectHome({ api }: { api: StoreApi }) {
         <h2>
           プロジェクト <span className="sub">{projects.length} 件</span>
         </h2>
-        {projects.length === 0 && <div className="empty">まだプロジェクトがありません。上から追加してください。</div>}
+        {loading && <div className="empty">読み込み中…</div>}
+        {!loading && projects.length === 0 && <div className="empty">まだプロジェクトがありません。上から追加してください。</div>}
         {projects.map((p) => (
           <div className="projcard" key={p.id}>
             <div>
@@ -68,7 +75,7 @@ export function ProjectHome({ api }: { api: StoreApi }) {
               <button
                 className="btn sm danger"
                 onClick={() => {
-                  if (confirm(`「${p.name}」を削除します。計測データも消えます。よろしいですか？`)) api.deleteProject(p.id);
+                  if (confirm(`「${p.name}」を削除します。計測データも消えます。よろしいですか？`)) void deleteProject(p.id);
                 }}
               >
                 削除

@@ -1,32 +1,65 @@
-// 工数管理 — localStorage 永続化ストア + アクション
-// 同一ブラウザ内で「管理」「共有」両ビューが同じデータを共有。
-// 別タブ間は 'storage' イベントで同期（本番の別端末共有は要バックエンド）。
+// 工数管理 — Firestore 本番共有化ストア＋認証
+// データモデル：collection 'projects' の各ドキュメント = 1プロジェクトの全状態
+//   projects/{id} = { name, createdAt, workTypes[], entries[], plans[] }
+// - 管理（オーナー）：ログイン必須。一覧＝collectionを購読、各プロジェクト＝ドキュメントを購読して書き込み。
+// - クライアント共有：ログイン不要。共有URLのプロジェクトIDでドキュメント単体をリアルタイム購読（読み取り専用）。
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  collection,
+  deleteDoc,
+  doc,
+  onSnapshot,
+  query,
+  setDoc,
+  updateDoc,
+} from 'firebase/firestore';
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth';
+import { auth, db } from './firebase';
 import { uid } from './util';
-import type { PlannedWork, Store, TimeEntry, WorkKind, WorkType } from './types';
+import type { PlannedWork, Project, TimeEntry, WorkKind, WorkType } from './types';
 
-const KEY = 'kosu-store-v1';
+/* ============ 認証（オーナーのみ書き込み） ============ */
 
-const empty: Store = { projects: [], workTypes: [], entries: [], plans: [] };
-
-function load(): Store {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return empty;
-    const s = JSON.parse(raw) as Store;
-    return {
-      projects: s.projects ?? [],
-      workTypes: s.workTypes ?? [],
-      entries: s.entries ?? [],
-      plans: s.plans ?? [],
-    };
-  } catch {
-    return empty;
-  }
+export interface AuthApi {
+  user: User | null;
+  ready: boolean;
+  error: string;
+  signIn: (email: string, password: string) => Promise<void>;
+  signOutUser: () => Promise<void>;
 }
 
-/** 作業種の既定3種を生成 */
+export function useAuth(): AuthApi {
+  const [user, setUser] = useState<User | null>(auth.currentUser);
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(
+    () =>
+      onAuthStateChanged(auth, (u) => {
+        setUser(u);
+        setReady(true);
+      }),
+    [],
+  );
+
+  const signIn = useCallback(async (email: string, password: string) => {
+    setError('');
+    try {
+      await signInWithEmailAndPassword(auth, email.trim(), password);
+    } catch (e) {
+      setError('メールアドレスまたはパスワードが違います。');
+      throw e;
+    }
+  }, []);
+
+  const signOutUser = useCallback(() => signOut(auth), []);
+
+  return { user, ready, error, signIn, signOutUser };
+}
+
+/* ============ プロジェクト一覧（オーナー・要ログイン） ============ */
+
 function defaultWorkTypes(projectId: string): WorkType[] {
   return [
     { id: uid(), projectId, name: 'デザイン', kind: 'design', rate: null },
@@ -35,10 +68,61 @@ function defaultWorkTypes(projectId: string): WorkType[] {
   ];
 }
 
+export interface ProjectListApi {
+  projects: Project[];
+  loading: boolean;
+  createProject: (name: string) => Promise<string>;
+  deleteProject: (id: string) => Promise<void>;
+}
+
+export function useProjectList(enabled: boolean): ProjectListApi {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const unsub = onSnapshot(query(collection(db, 'projects')), (snap) => {
+      const list = snap.docs
+        .map((d) => ({ id: d.id, name: d.data().name as string, createdAt: d.data().createdAt as number }))
+        .sort((a, b) => a.createdAt - b.createdAt);
+      setProjects(list);
+      setLoading(false);
+    });
+    return unsub;
+  }, [enabled]);
+
+  const createProject = useCallback(async (name: string) => {
+    const id = uid();
+    await setDoc(doc(db, 'projects', id), {
+      name: name.trim() || '無題プロジェクト',
+      createdAt: Date.now(),
+      workTypes: defaultWorkTypes(id),
+      entries: [],
+      plans: [],
+    });
+    return id;
+  }, []);
+
+  const deleteProject = useCallback((id: string) => deleteDoc(doc(db, 'projects', id)), []);
+
+  return { projects, loading, createProject, deleteProject };
+}
+
+/* ============ 単一プロジェクト（リアルタイム同期＋アクション） ============ */
+
+interface ProjectDoc {
+  name: string;
+  createdAt: number;
+  workTypes: WorkType[];
+  entries: TimeEntry[];
+  plans: PlannedWork[];
+}
+
+/** 画面（Admin/Client）が使うプロジェクト単位のAPI。store は当該プロジェクトのみを含む。 */
 export interface StoreApi {
-  store: Store;
-  createProject: (name: string) => string;
-  deleteProject: (id: string) => void;
+  store: { projects: Project[]; workTypes: WorkType[]; entries: TimeEntry[]; plans: PlannedWork[] };
+  loading: boolean;
+  exists: boolean;
   addWorkType: (projectId: string, name: string, kind: WorkKind) => void;
   setRate: (workTypeId: string, rate: number) => void;
   deleteWorkType: (id: string) => void;
@@ -53,136 +137,133 @@ export interface StoreApi {
   hasMeasurements: (workTypeId: string) => boolean;
 }
 
-export function useStore(): StoreApi {
-  const [store, setStore] = useState<Store>(load);
+export function useProjectStore(projectId: string): StoreApi {
+  const [data, setData] = useState<ProjectDoc | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [exists, setExists] = useState(true);
+  const dataRef = useRef<ProjectDoc | null>(null);
+  dataRef.current = data;
 
-  // 永続化
   useEffect(() => {
-    localStorage.setItem(KEY, JSON.stringify(store));
-  }, [store]);
-
-  // 別タブ同期
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === KEY && e.newValue) {
-        try {
-          setStore(JSON.parse(e.newValue));
-        } catch {
-          /* ignore */
+    setLoading(true);
+    const ref = doc(db, 'projects', projectId);
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        if (snap.exists()) {
+          const d = snap.data() as Partial<ProjectDoc>;
+          setData({
+            name: d.name ?? '',
+            createdAt: d.createdAt ?? Date.now(),
+            workTypes: d.workTypes ?? [],
+            entries: d.entries ?? [],
+            plans: d.plans ?? [],
+          });
+          setExists(true);
+        } else {
+          setData(null);
+          setExists(false);
         }
-      }
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, []);
+        setLoading(false);
+      },
+      () => setLoading(false),
+    );
+    return unsub;
+  }, [projectId]);
 
-  const createProject = useCallback((name: string) => {
-    const id = uid();
-    setStore((s) => ({
-      ...s,
-      projects: [...s.projects, { id, name: name.trim() || '無題プロジェクト', createdAt: Date.now() }],
-      workTypes: [...s.workTypes, ...defaultWorkTypes(id)],
-    }));
-    return id;
-  }, []);
+  const ref = doc(db, 'projects', projectId);
+  const patch = (fields: Partial<ProjectDoc>) => {
+    void updateDoc(ref, fields as Record<string, unknown>);
+  };
 
-  const deleteProject = useCallback((id: string) => {
-    setStore((s) => ({
-      ...s,
-      projects: s.projects.filter((p) => p.id !== id),
-      workTypes: s.workTypes.filter((w) => w.projectId !== id),
-      entries: s.entries.filter((e) => e.projectId !== id),
-      plans: s.plans.filter((p) => p.projectId !== id),
-    }));
-  }, []);
+  const addWorkType = useCallback((_pid: string, name: string, kind: WorkKind) => {
+    const d = dataRef.current;
+    if (!d || !name.trim()) return;
+    patch({ workTypes: [...d.workTypes, { id: uid(), projectId, name: name.trim(), kind, rate: null }] });
+  }, [projectId]);
 
-  const addWorkType = useCallback((projectId: string, name: string, kind: WorkKind) => {
-    const n = name.trim();
-    if (!n) return;
-    setStore((s) => ({
-      ...s,
-      workTypes: [...s.workTypes, { id: uid(), projectId, name: n, kind, rate: null }],
-    }));
-  }, []);
-
-  // 単価は未設定（null）のときのみ設定可。設定後は変更不可。
   const setRate = useCallback((workTypeId: string, rate: number) => {
-    setStore((s) => ({
-      ...s,
-      workTypes: s.workTypes.map((w) =>
-        w.id === workTypeId && w.kind === 'coding' && w.rate == null ? { ...w, rate } : w,
-      ),
-    }));
-  }, []);
+    const d = dataRef.current;
+    if (!d) return;
+    patch({
+      workTypes: d.workTypes.map((w) => (w.id === workTypeId && w.kind === 'coding' && w.rate == null ? { ...w, rate } : w)),
+    });
+  }, [projectId]);
 
-  // 計測済み（entries に存在）の作業種は削除不可。
   const deleteWorkType = useCallback((id: string) => {
-    setStore((s) => {
-      if (s.entries.some((e) => e.workTypeId === id)) return s;
-      return { ...s, workTypes: s.workTypes.filter((w) => w.id !== id) };
-    });
-  }, []);
+    const d = dataRef.current;
+    if (!d || d.entries.some((e) => e.workTypeId === id)) return;
+    patch({ workTypes: d.workTypes.filter((w) => w.id !== id) });
+  }, [projectId]);
 
-  const startTimer = useCallback((projectId: string, workTypeId: string) => {
-    setStore((s) => {
-      // 同一作業種で計測中が既にあれば二重開始しない
-      if (s.entries.some((e) => e.projectId === projectId && e.workTypeId === workTypeId && e.end == null)) return s;
-      const entry: TimeEntry = { id: uid(), projectId, workTypeId, start: Date.now(), end: null };
-      return { ...s, entries: [...s.entries, entry] };
-    });
-  }, []);
+  const startTimer = useCallback((_pid: string, workTypeId: string) => {
+    const d = dataRef.current;
+    if (!d || d.entries.some((e) => e.workTypeId === workTypeId && e.end == null)) return;
+    const entry: TimeEntry = { id: uid(), projectId, workTypeId, start: Date.now(), end: null };
+    patch({ entries: [...d.entries, entry] });
+  }, [projectId]);
 
   const stopTimer = useCallback((entryId: string) => {
-    setStore((s) => ({
-      ...s,
-      entries: s.entries.map((e) => (e.id === entryId && e.end == null ? { ...e, end: Date.now() } : e)),
-    }));
-  }, []);
+    const d = dataRef.current;
+    if (!d) return;
+    patch({ entries: d.entries.map((e) => (e.id === entryId && e.end == null ? { ...e, end: Date.now() } : e)) });
+  }, [projectId]);
 
-  const updateEntry = useCallback((entryId: string, patch: Partial<Pick<TimeEntry, 'start' | 'end'>>) => {
-    setStore((s) => ({
-      ...s,
-      entries: s.entries.map((e) => (e.id === entryId ? { ...e, ...patch, manual: true } : e)),
-    }));
-  }, []);
+  const updateEntry = useCallback((entryId: string, up: Partial<Pick<TimeEntry, 'start' | 'end'>>) => {
+    const d = dataRef.current;
+    if (!d) return;
+    patch({ entries: d.entries.map((e) => (e.id === entryId ? { ...e, ...up, manual: true } : e)) });
+  }, [projectId]);
 
-  const addManualEntry = useCallback(
-    (projectId: string, workTypeId: string, start: number, end: number) => {
-      setStore((s) => ({
-        ...s,
-        entries: [...s.entries, { id: uid(), projectId, workTypeId, start, end, manual: true }],
-      }));
-    },
+  const addManualEntry = useCallback((_pid: string, workTypeId: string, start: number, end: number) => {
+    const d = dataRef.current;
+    if (!d) return;
+    patch({ entries: [...d.entries, { id: uid(), projectId, workTypeId, start, end, manual: true }] });
+  }, [projectId]);
+
+  const deleteEntry = useCallback((entryId: string) => {
+    const d = dataRef.current;
+    if (!d) return;
+    patch({ entries: d.entries.filter((e) => e.id !== entryId) });
+  }, [projectId]);
+
+  const addPlan = useCallback((_pid: string, month: string, title: string, workTypeId: string | null) => {
+    const d = dataRef.current;
+    if (!d || !title.trim()) return;
+    const plan: PlannedWork = { id: uid(), projectId, month, title: title.trim(), workTypeId, done: false };
+    patch({ plans: [...d.plans, plan] });
+  }, [projectId]);
+
+  const togglePlan = useCallback((id: string) => {
+    const d = dataRef.current;
+    if (!d) return;
+    patch({ plans: d.plans.map((p) => (p.id === id ? { ...p, done: !p.done } : p)) });
+  }, [projectId]);
+
+  const deletePlan = useCallback((id: string) => {
+    const d = dataRef.current;
+    if (!d) return;
+    patch({ plans: d.plans.filter((p) => p.id !== id) });
+  }, [projectId]);
+
+  const hasMeasurements = useCallback(
+    (workTypeId: string) => !!dataRef.current?.entries.some((e) => e.workTypeId === workTypeId),
     [],
   );
 
-  const deleteEntry = useCallback((entryId: string) => {
-    setStore((s) => ({ ...s, entries: s.entries.filter((e) => e.id !== entryId) }));
-  }, []);
-
-  const addPlan = useCallback((projectId: string, month: string, title: string, workTypeId: string | null) => {
-    const t = title.trim();
-    if (!t) return;
-    setStore((s) => ({
-      ...s,
-      plans: [...s.plans, { id: uid(), projectId, month, title: t, workTypeId, done: false } as PlannedWork],
-    }));
-  }, []);
-
-  const togglePlan = useCallback((id: string) => {
-    setStore((s) => ({ ...s, plans: s.plans.map((p) => (p.id === id ? { ...p, done: !p.done } : p)) }));
-  }, []);
-
-  const deletePlan = useCallback((id: string) => {
-    setStore((s) => ({ ...s, plans: s.plans.filter((p) => p.id !== id) }));
-  }, []);
-
-  const hasMeasurements = useCallback((workTypeId: string) => store.entries.some((e) => e.workTypeId === workTypeId), [store.entries]);
+  const store = data
+    ? {
+        projects: [{ id: projectId, name: data.name, createdAt: data.createdAt }],
+        workTypes: data.workTypes,
+        entries: data.entries,
+        plans: data.plans,
+      }
+    : { projects: [], workTypes: [], entries: [], plans: [] };
 
   return {
     store,
-    createProject,
-    deleteProject,
+    loading,
+    exists,
     addWorkType,
     setRate,
     deleteWorkType,
