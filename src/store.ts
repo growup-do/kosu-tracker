@@ -1,8 +1,7 @@
-// 工数管理 — Firestore 本番共有化ストア＋認証
+// 工数管理 — Firestore 共有ストア（ログインなし）
 // データモデル：collection 'projects' の各ドキュメント = 1プロジェクトの全状態
 //   projects/{id} = { name, createdAt, workTypes[], entries[], plans[] }
-// - 管理（オーナー）：ログイン必須。一覧＝collectionを購読、各プロジェクト＝ドキュメントを購読して書き込み。
-// - クライアント共有：ログイン不要。共有URLのプロジェクトIDでドキュメント単体をリアルタイム購読（読み取り専用）。
+// ログイン制限は上流の管理システム側で行うため、本アプリ自体は認証なし（URLを知っていれば利用可）。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -14,8 +13,7 @@ import {
   setDoc,
   updateDoc,
 } from 'firebase/firestore';
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth';
-import { auth, db } from './firebase';
+import { db } from './firebase';
 import { uid } from './util';
 import type { PlannedWork, Project, TimeEntry, WorkKind, WorkType } from './types';
 
@@ -29,46 +27,7 @@ function fbErr(e: unknown): string {
   return 'エラー: ' + ((e as Error)?.message ?? String(e));
 }
 
-/* ============ 認証（オーナーのみ書き込み） ============ */
-
-export interface AuthApi {
-  user: User | null;
-  ready: boolean;
-  error: string;
-  signIn: (email: string, password: string) => Promise<void>;
-  signOutUser: () => Promise<void>;
-}
-
-export function useAuth(): AuthApi {
-  const [user, setUser] = useState<User | null>(auth.currentUser);
-  const [ready, setReady] = useState(false);
-  const [error, setError] = useState('');
-
-  useEffect(
-    () =>
-      onAuthStateChanged(auth, (u) => {
-        setUser(u);
-        setReady(true);
-      }),
-    [],
-  );
-
-  const signIn = useCallback(async (email: string, password: string) => {
-    setError('');
-    try {
-      await signInWithEmailAndPassword(auth, email.trim(), password);
-    } catch (e) {
-      setError('メールアドレスまたはパスワードが違います。');
-      throw e;
-    }
-  }, []);
-
-  const signOutUser = useCallback(() => signOut(auth), []);
-
-  return { user, ready, error, signIn, signOutUser };
-}
-
-/* ============ プロジェクト一覧（オーナー・要ログイン） ============ */
+/* ============ プロジェクト一覧 ============ */
 
 function defaultWorkTypes(projectId: string): WorkType[] {
   return [

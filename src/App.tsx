@@ -1,13 +1,13 @@
-// 工数管理システム（本番共有・Firestore）
-//   （パラメータなし）        … プロジェクト一覧（オーナー・要ログイン）
-//   ?project=ID&view=admin   … 弊社管理ビュー（要ログイン・一覧へ戻る導線なし）
-//   ?project=ID&view=client  … クライアント共有ビュー（ログイン不要・読み取り専用・共有用URL）
+// 工数管理システム（Firestore・ログインなし）
+//   （パラメータなし）        … プロジェクト一覧
+//   ?project=ID&view=admin   … 弊社管理ビュー（一覧へ戻る導線なし）
+//   ?project=ID&view=client  … クライアント共有ビュー（読み取り専用・共有用URL）
+// ログイン制限は上流の管理システム側で行うため、本アプリ自体は認証なし。
 
 import { useState } from 'react';
-import { useAuth, useProjectStore } from './store';
+import { useProjectStore } from './store';
 import { currentMonth, fmtMonth, shiftMonth, viewUrl } from './util';
 import { Logo } from './components/Logo';
-import { Login } from './components/Login';
 import { ProjectHome } from './components/ProjectHome';
 import { AdminView } from './components/AdminView';
 import { ClientView } from './components/ClientView';
@@ -17,68 +17,12 @@ export default function App() {
   const projectId = params.get('project');
   const view: 'admin' | 'client' = params.get('view') === 'client' ? 'client' : 'admin';
 
-  // 共有ビューはログイン不要・読み取り専用（単一ドキュメントを購読）
-  if (projectId && view === 'client') {
-    return <ClientRoute projectId={projectId} />;
-  }
-
-  // それ以外（一覧・管理）はオーナーのログインが必要
-  return <OwnerRoute projectId={projectId} />;
+  if (projectId && view === 'client') return <ProjectRoute projectId={projectId} mode="client" />;
+  if (projectId) return <ProjectRoute projectId={projectId} mode="admin" />;
+  return <HomeRoute />;
 }
 
-/* ---------- クライアント共有（ログイン不要） ---------- */
-function ClientRoute({ projectId }: { projectId: string }) {
-  const api = useProjectStore(projectId);
-  const [month, setMonth] = useState<string>(currentMonth());
-  const name = api.store.projects[0]?.name ?? '';
-
-  return (
-    <div className="app">
-      <div className="topbar">
-        <div className="left">
-          <Logo />
-          <div className="crumb">
-            <b>{name || '共有ビュー'}</b>
-            <span className="tagview"> ・共有ビュー</span>
-          </div>
-        </div>
-        <MonthNav month={month} setMonth={setMonth} />
-      </div>
-      {api.error && (
-        <div className="banner" style={{ background: '#fdeee9', borderColor: '#e6cfc7', color: '#c0392b' }}>{api.error}</div>
-      )}
-      {api.loading ? (
-        <div className="card"><div className="empty">読み込み中…</div></div>
-      ) : !api.exists ? (
-        <div className="banner">このプロジェクトは見つかりませんでした。共有URLをご確認ください。</div>
-      ) : (
-        <ClientView api={api} projectId={projectId} month={month} />
-      )}
-    </div>
-  );
-}
-
-/* ---------- オーナー（一覧・管理／要ログイン） ---------- */
-function OwnerRoute({ projectId }: { projectId: string | null }) {
-  const auth = useAuth();
-
-  if (!auth.ready) {
-    return (
-      <div className="app">
-        <div className="card"><div className="empty">読み込み中…</div></div>
-      </div>
-    );
-  }
-  if (!auth.user) return <Login auth={auth} />;
-
-  return projectId ? (
-    <AdminRoute projectId={projectId} onSignOut={auth.signOutUser} />
-  ) : (
-    <HomeRoute onSignOut={auth.signOutUser} />
-  );
-}
-
-function HomeRoute({ onSignOut }: { onSignOut: () => void }) {
+function HomeRoute() {
   return (
     <div className="app">
       <div className="topbar">
@@ -88,16 +32,13 @@ function HomeRoute({ onSignOut }: { onSignOut: () => void }) {
             工数管理<span>システム</span>
           </div>
         </div>
-        <button className="btn ghost sm" onClick={onSignOut}>
-          ログアウト
-        </button>
       </div>
       <ProjectHome />
     </div>
   );
 }
 
-function AdminRoute({ projectId, onSignOut }: { projectId: string; onSignOut: () => void }) {
+function ProjectRoute({ projectId, mode }: { projectId: string; mode: 'admin' | 'client' }) {
   const api = useProjectStore(projectId);
   const [month, setMonth] = useState<string>(currentMonth());
   const name = api.store.projects[0]?.name ?? '';
@@ -108,26 +49,29 @@ function AdminRoute({ projectId, onSignOut }: { projectId: string; onSignOut: ()
         <div className="left">
           <Logo />
           <div className="crumb">
-            <b>{name || 'プロジェクト'}</b>
+            <b>{name || (mode === 'client' ? '共有ビュー' : 'プロジェクト')}</b>
+            {mode === 'client' && <span className="tagview"> ・共有ビュー</span>}
           </div>
         </div>
         <div className="rowwrap">
           <MonthNav month={month} setMonth={setMonth} />
-          <a className="btn sm" href={viewUrl(projectId, 'client')} target="_blank" rel="noreferrer">
-            共有ビューを開く ↗
-          </a>
-          <button className="btn ghost sm" onClick={onSignOut}>
-            ログアウト
-          </button>
+          {mode === 'admin' && (
+            <a className="btn sm" href={viewUrl(projectId, 'client')} target="_blank" rel="noreferrer">
+              共有ビューを開く ↗
+            </a>
+          )}
         </div>
       </div>
+
       {api.error && (
         <div className="banner" style={{ background: '#fdeee9', borderColor: '#e6cfc7', color: '#c0392b' }}>{api.error}</div>
       )}
       {api.loading ? (
         <div className="card"><div className="empty">読み込み中…</div></div>
       ) : !api.exists ? (
-        <div className="banner">このプロジェクトは見つかりませんでした。</div>
+        <div className="banner">このプロジェクトは見つかりませんでした。{mode === 'client' ? '共有URLをご確認ください。' : ''}</div>
+      ) : mode === 'client' ? (
+        <ClientView api={api} projectId={projectId} month={month} />
       ) : (
         <AdminView api={api} projectId={projectId} month={month} />
       )}
