@@ -4,7 +4,7 @@ import type { KeyboardEvent } from 'react';
 import type { TimeEntry } from './types';
 
 /** クライアント請求の時給単価（円） */
-export const CLIENT_RATE = 7000;
+export const CLIENT_RATE = 6250;
 
 /**
  * Enterで実行するハンドラ。ただし日本語IMEの変換確定Enterは無視する。
