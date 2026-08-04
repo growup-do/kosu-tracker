@@ -21,6 +21,27 @@ export function ProjectHome() {
     }
   };
 
+  /**
+   * プロジェクト削除の二重確認。
+   * 削除は取り消せないため、①意思確認 → ②プロジェクト名の入力照合 の2段階を通過した場合のみ実行する。
+   */
+  const confirmDelete = (name: string, onConfirmed: () => void) => {
+    const ok = confirm(
+      `「${name}」を本当に削除しますか？\n\n` +
+        `計測記録・作業予定・単価設定など、このプロジェクトのデータがすべて削除されます。\n` +
+        `この操作は取り消せません。`,
+    );
+    if (!ok) return;
+
+    const typed = prompt(`最終確認です。\n削除するには、プロジェクト名「${name}」を入力してください。`, '');
+    if (typed === null) return; // キャンセル
+    if (typed.trim() !== name.trim()) {
+      alert('プロジェクト名が一致しなかったため、削除を中止しました。');
+      return;
+    }
+    onConfirmed();
+  };
+
   const copyClientUrl = async (id: string) => {
     const url = viewUrl(id, 'client');
     try {
@@ -77,12 +98,7 @@ export function ProjectHome() {
               <button className="btn sm" onClick={() => copyClientUrl(p.id)}>
                 共有URLをコピー
               </button>
-              <button
-                className="btn sm danger"
-                onClick={() => {
-                  if (confirm(`「${p.name}」を削除します。計測データも消えます。よろしいですか？`)) void deleteProject(p.id);
-                }}
-              >
+              <button className="btn sm danger" onClick={() => confirmDelete(p.name, () => void deleteProject(p.id))}>
                 削除
               </button>
             </div>
