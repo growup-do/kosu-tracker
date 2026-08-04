@@ -10,8 +10,8 @@ import {
   doc,
   onSnapshot,
   query,
+  runTransaction,
   setDoc,
-  updateDoc,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { uid } from './util';
@@ -168,80 +168,96 @@ export function useProjectStore(projectId: string): StoreApi {
     return unsub;
   }, [projectId]);
 
-  const ref = doc(db, 'projects', projectId);
-  const patch = (fields: Partial<ProjectDoc>) => {
-    updateDoc(ref, fields as Record<string, unknown>).catch((e) => setError(fbErr(e)));
-  };
+  // すべての書き込みはトランザクションで行う。
+  // サーバー上の最新データを読んでから変更を適用するため、複数人が同時に操作しても
+  // 「後の書き込みが先の書き込みを丸ごと上書きして記録が消える」（Lost Update）が起きない。
+  // 競合時は Firestore が自動リトライする。ガード判定（二重開始・単価確定済み等）も最新データ側で行う。
+  const mutate = useCallback(
+    (fn: (d: ProjectDoc) => Partial<ProjectDoc> | null) => {
+      const ref = doc(db, 'projects', projectId);
+      runTransaction(db, async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists()) return; // プロジェクトが削除済みなら何もしない
+        const raw = snap.data() as Partial<ProjectDoc>;
+        const d: ProjectDoc = {
+          name: raw.name ?? '',
+          createdAt: raw.createdAt ?? Date.now(),
+          workTypes: raw.workTypes ?? [],
+          entries: raw.entries ?? [],
+          plans: raw.plans ?? [],
+        };
+        const fields = fn(d);
+        if (fields) tx.update(ref, fields as Record<string, unknown>);
+      }).catch((e) => setError(fbErr(e)));
+    },
+    [projectId],
+  );
 
   const addWorkType = useCallback((_pid: string, name: string, kind: WorkKind) => {
-    const d = dataRef.current;
-    if (!d || !name.trim()) return;
-    patch({ workTypes: [...d.workTypes, { id: uid(), projectId, name: name.trim(), kind, rate: null }] });
-  }, [projectId]);
+    if (!name.trim()) return;
+    mutate((d) => ({
+      workTypes: [...d.workTypes, { id: uid(), projectId, name: name.trim(), kind, rate: null }],
+    }));
+  }, [projectId, mutate]);
 
   const setRate = useCallback((workTypeId: string, rate: number) => {
-    const d = dataRef.current;
-    if (!d) return;
-    patch({
+    mutate((d) => ({
       workTypes: d.workTypes.map((w) => (w.id === workTypeId && w.kind === 'coding' && w.rate == null ? { ...w, rate } : w)),
-    });
-  }, [projectId]);
+    }));
+  }, [mutate]);
 
   const deleteWorkType = useCallback((id: string) => {
-    const d = dataRef.current;
-    if (!d || d.entries.some((e) => e.workTypeId === id)) return;
-    patch({ workTypes: d.workTypes.filter((w) => w.id !== id) });
-  }, [projectId]);
+    mutate((d) => {
+      if (d.entries.some((e) => e.workTypeId === id)) return null; // 計測済みは削除不可
+      return { workTypes: d.workTypes.filter((w) => w.id !== id) };
+    });
+  }, [mutate]);
 
   const startTimer = useCallback((_pid: string, workTypeId: string) => {
-    const d = dataRef.current;
-    if (!d || d.entries.some((e) => e.workTypeId === workTypeId && e.end == null)) return;
-    const entry: TimeEntry = { id: uid(), projectId, workTypeId, start: Date.now(), end: null };
-    patch({ entries: [...d.entries, entry] });
-  }, [projectId]);
+    mutate((d) => {
+      if (d.entries.some((e) => e.workTypeId === workTypeId && e.end == null)) return null; // 二重開始防止
+      const entry: TimeEntry = { id: uid(), projectId, workTypeId, start: Date.now(), end: null };
+      return { entries: [...d.entries, entry] };
+    });
+  }, [projectId, mutate]);
 
   const stopTimer = useCallback((entryId: string) => {
-    const d = dataRef.current;
-    if (!d) return;
-    patch({ entries: d.entries.map((e) => (e.id === entryId && e.end == null ? { ...e, end: Date.now() } : e)) });
-  }, [projectId]);
+    mutate((d) => ({
+      entries: d.entries.map((e) => (e.id === entryId && e.end == null ? { ...e, end: Date.now() } : e)),
+    }));
+  }, [mutate]);
 
   const updateEntry = useCallback((entryId: string, up: Partial<Pick<TimeEntry, 'start' | 'end'>>) => {
-    const d = dataRef.current;
-    if (!d) return;
-    patch({ entries: d.entries.map((e) => (e.id === entryId ? { ...e, ...up, manual: true } : e)) });
-  }, [projectId]);
+    mutate((d) => ({
+      entries: d.entries.map((e) => (e.id === entryId ? { ...e, ...up, manual: true } : e)),
+    }));
+  }, [mutate]);
 
   const addManualEntry = useCallback((_pid: string, workTypeId: string, start: number, end: number) => {
-    const d = dataRef.current;
-    if (!d) return;
-    patch({ entries: [...d.entries, { id: uid(), projectId, workTypeId, start, end, manual: true }] });
-  }, [projectId]);
+    mutate((d) => ({
+      entries: [...d.entries, { id: uid(), projectId, workTypeId, start, end, manual: true }],
+    }));
+  }, [projectId, mutate]);
 
   const deleteEntry = useCallback((entryId: string) => {
-    const d = dataRef.current;
-    if (!d) return;
-    patch({ entries: d.entries.filter((e) => e.id !== entryId) });
-  }, [projectId]);
+    mutate((d) => ({ entries: d.entries.filter((e) => e.id !== entryId) }));
+  }, [mutate]);
 
   const addPlan = useCallback((_pid: string, month: string, title: string, workTypeId: string | null) => {
-    const d = dataRef.current;
-    if (!d || !title.trim()) return;
-    const plan: PlannedWork = { id: uid(), projectId, month, title: title.trim(), workTypeId, done: false };
-    patch({ plans: [...d.plans, plan] });
-  }, [projectId]);
+    if (!title.trim()) return;
+    mutate((d) => {
+      const plan: PlannedWork = { id: uid(), projectId, month, title: title.trim(), workTypeId, done: false };
+      return { plans: [...d.plans, plan] };
+    });
+  }, [projectId, mutate]);
 
   const togglePlan = useCallback((id: string) => {
-    const d = dataRef.current;
-    if (!d) return;
-    patch({ plans: d.plans.map((p) => (p.id === id ? { ...p, done: !p.done } : p)) });
-  }, [projectId]);
+    mutate((d) => ({ plans: d.plans.map((p) => (p.id === id ? { ...p, done: !p.done } : p)) }));
+  }, [mutate]);
 
   const deletePlan = useCallback((id: string) => {
-    const d = dataRef.current;
-    if (!d) return;
-    patch({ plans: d.plans.filter((p) => p.id !== id) });
-  }, [projectId]);
+    mutate((d) => ({ plans: d.plans.filter((p) => p.id !== id) }));
+  }, [mutate]);
 
   const hasMeasurements = useCallback(
     (workTypeId: string) => !!dataRef.current?.entries.some((e) => e.workTypeId === workTypeId),
