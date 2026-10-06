@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 管理画面にログインできるメンバー（src/auth.ts の ADMIN_EMAILS と揃える）
+    function isAdmin() {
+      return request.auth != null
+        && request.auth.token.email in [
+          'suzuki@growup-do.com',   // オーナー
+          'iiken0126@gmail.com'     // コーダー
+        ];
+    }
+
+    match /projects/{projectId} {
+      allow get: if true;               // 共有ビュー：IDを知っていれば閲覧のみ可
+      allow list: if isAdmin();         // プロジェクト一覧はメンバーのみ
+      allow create, update, delete: if isAdmin();
+    }
+  }
+}

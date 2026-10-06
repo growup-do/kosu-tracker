@@ -1,8 +1,8 @@
-// 工数管理システム（Firestore・ログインなし）
-//   （パラメータなし）        … プロジェクト一覧
-//   ?project=ID&view=admin   … 弊社管理ビュー（一覧へ戻る導線なし）
-//   ?project=ID&view=client  … クライアント共有ビュー（読み取り専用・共有用URL）
-// ログイン制限は上流の管理システム側で行うため、本アプリ自体は認証なし。
+// 工数管理システム（Firestore）
+//   （パラメータなし）        … プロジェクト一覧（要ログイン）
+//   ?project=ID&view=admin   … 弊社管理ビュー（要ログイン・一覧へ戻る導線なし）
+//   ?project=ID&view=client  … クライアント共有ビュー（ログイン不要・読み取り専用・共有用URL）
+// ログインできるのは auth.ts / firestore.rules の許可リストのメンバーのみ。
 
 import { useState } from 'react';
 import { useProjectStore } from './store';
@@ -11,6 +11,7 @@ import { Logo } from './components/Logo';
 import { ProjectHome } from './components/ProjectHome';
 import { AdminView } from './components/AdminView';
 import { ClientView } from './components/ClientView';
+import { LoginGate, UserBadge } from './components/LoginGate';
 
 export default function App() {
   const params = new URLSearchParams(window.location.search);
@@ -18,8 +19,8 @@ export default function App() {
   const view: 'admin' | 'client' = params.get('view') === 'client' ? 'client' : 'admin';
 
   if (projectId && view === 'client') return <ProjectRoute projectId={projectId} mode="client" />;
-  if (projectId) return <ProjectRoute projectId={projectId} mode="admin" />;
-  return <HomeRoute />;
+  if (projectId) return <LoginGate><ProjectRoute projectId={projectId} mode="admin" /></LoginGate>;
+  return <LoginGate><HomeRoute /></LoginGate>;
 }
 
 function HomeRoute() {
@@ -32,6 +33,7 @@ function HomeRoute() {
             工数管理<span>システム</span>
           </div>
         </div>
+        <UserBadge />
       </div>
       <ProjectHome />
     </div>
@@ -60,6 +62,7 @@ function ProjectRoute({ projectId, mode }: { projectId: string; mode: 'admin' | 
               共有ビューを開く ↗
             </a>
           )}
+          {mode === 'admin' && <UserBadge />}
         </div>
       </div>
 
