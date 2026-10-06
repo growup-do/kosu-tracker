@@ -15,5 +15,10 @@ service cloud.firestore {
       allow list: if isAdmin();         // プロジェクト一覧はメンバーのみ
       allow create, update, delete: if isAdmin();
     }
+    // Webチャッピー プロトタイプの確認メモ・確認事項・やりとり（demo/src/memo, demo/src/issues）
+    // クライアントがログインなしで書き込むため、プロトタイプの間は読み書きを開放する
+    match /protoMemos/{memoId} {
+      allow read, write: if true;
+    }
   }
 }
