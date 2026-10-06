@@ -76,7 +76,7 @@ export function AdminView({ api, projectId, month }: { api: StoreApi; projectId:
 
       {/* ===== 作業種の管理 ===== */}
       <div className="card">
-        <h2>作業種の管理 <span className="sub">追加・削除ができます（計測済みは削除不可）。単価はコーディングのみ・一度設定で確定。</span></h2>
+        <h2>作業種の管理 <span className="sub">追加・削除ができます（初期作業・計測済みは削除不可）。単価はコーディングのみ・一度設定で確定。</span></h2>
         {workTypes.map((w) => {
           const measured = api.hasMeasurements(w.id);
           return (
@@ -94,8 +94,8 @@ export function AdminView({ api, projectId, month }: { api: StoreApi; projectId:
                 )}
                 <button
                   className="btn sm danger"
-                  disabled={measured}
-                  title={measured ? '計測済みのため削除できません' : ''}
+                  disabled={w.fixed || measured}
+                  title={w.fixed ? '初期作業のため削除できません' : measured ? '計測済みのため削除できません' : ''}
                   onClick={() => api.deleteWorkType(w.id)}
                 >
                   削除

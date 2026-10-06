@@ -16,6 +16,8 @@ export interface WorkType {
   kind: WorkKind;
   /** 外注原価管理用の単価（コーディングのみ・null=未設定。設定後は変更不可） */
   rate: number | null;
+  /** 初期作業（デザイン / A / B）。削除不可 */
+  fixed?: boolean;
 }
 
 /** 1回の作業セッション（開始〜停止）。end=null は計測中＝現在作業中。 */

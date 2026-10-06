@@ -31,9 +31,9 @@ function fbErr(e: unknown): string {
 
 function defaultWorkTypes(projectId: string): WorkType[] {
   return [
-    { id: uid(), projectId, name: 'デザイン', kind: 'design', rate: null },
-    { id: uid(), projectId, name: 'コーディング作業（難易度A）', kind: 'coding', rate: null },
-    { id: uid(), projectId, name: 'コーディング作業（難易度B）', kind: 'coding', rate: null },
+    { id: uid(), projectId, name: 'デザイン', kind: 'design', rate: null, fixed: true },
+    { id: uid(), projectId, name: 'コーディング作業（難易度A）', kind: 'coding', rate: null, fixed: true },
+    { id: uid(), projectId, name: 'コーディング作業（難易度B）', kind: 'coding', rate: null, fixed: true },
   ];
 }
 
@@ -208,6 +208,7 @@ export function useProjectStore(projectId: string): StoreApi {
 
   const deleteWorkType = useCallback((id: string) => {
     mutate((d) => {
+      if (d.workTypes.some((w) => w.id === id && w.fixed)) return null; // 初期作業は削除不可
       if (d.entries.some((e) => e.workTypeId === id)) return null; // 計測済みは削除不可
       return { workTypes: d.workTypes.filter((w) => w.id !== id) };
     });
