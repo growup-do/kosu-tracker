@@ -5,7 +5,7 @@
 import { useState } from 'react';
 import { useNow, type StoreApi } from '../store';
 import { WorkTag } from './WorkTag';
-import { durationMs, fmtDateTime, fmtHM, fmtYen, hoursOf, inputToTs, isMonthEnded, monthKey, onEnter, tsToInput } from '../util';
+import { BILLING_UNIT_MIN, CLIENT_RATE, billableMs, durationMs, fmtDateTime, fmtHM, fmtYen, hoursOf, inputToTs, isMonthEnded, monthKey, onEnter, tsToInput } from '../util';
 import type { TimeEntry } from '../types';
 
 export function AdminView({ api, projectId, month }: { api: StoreApi; projectId: string; month: string }) {
@@ -27,6 +27,7 @@ export function AdminView({ api, projectId, month }: { api: StoreApi; projectId:
   });
   const totalMs = perType.reduce((a, x) => a + x.ms, 0);
   const totalCost = perType.reduce((a, x) => a + (x.cost ?? 0), 0);
+  const billMs = billableMs(totalMs); // クライアント請求：月合計を15分単位（切り捨て）
 
   const wt = (id: string) => workTypes.find((w) => w.id === id);
 
@@ -127,7 +128,13 @@ export function AdminView({ api, projectId, month }: { api: StoreApi; projectId:
             <div className="v">{fmtHM(totalMs)}</div>
             <div className="s">外注原価（コーディング）{fmtYen(totalCost)}</div>
           </div>
+          <div className="tile total">
+            <div className="l">クライアント請求（{BILLING_UNIT_MIN}分単位）</div>
+            <div className="v">{fmtHM(billMs)}</div>
+            <div className="s">請求額 {fmtYen(hoursOf(billMs) * CLIENT_RATE)}（{fmtYen(CLIENT_RATE)}/h）</div>
+          </div>
         </div>
+        <div className="hint">※ 請求は月の実働合計を{BILLING_UNIT_MIN}分未満切り捨てで計算（共有ビューと同じ）。外注原価は実働時間そのままで計算。</div>
       </div>
 
       {/* ===== アーカイブ ===== */}

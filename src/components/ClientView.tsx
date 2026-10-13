@@ -1,10 +1,11 @@
 // クライアント共有ビュー（閲覧専用）
-// 管理用データを読み取り表示。操作ボタンなし。3作業の時間と費用（時給単価は CLIENT_RATE）、
+// 管理用データを読み取り表示。操作ボタンなし。作業ごとの実働時間と、月合計の請求額
+// （月の実働合計を15分単位に丸めて CLIENT_RATE を乗じる）、
 // 現在作業中、月次アーカイブ、作業予定の閲覧。
 
 import { useNow, type StoreApi } from '../store';
 import { WorkTag } from './WorkTag';
-import { CLIENT_RATE, durationMs, fmtDateTime, fmtHM, fmtYen, hoursOf, isMonthEnded, monthKey } from '../util';
+import { BILLING_UNIT_MIN, CLIENT_RATE, billableMs, durationMs, fmtDateTime, fmtHM, fmtYen, hoursOf, isMonthEnded, monthKey } from '../util';
 
 export function ClientView({ api, projectId, month }: { api: StoreApi; projectId: string; month: string }) {
   const { store } = api;
@@ -19,10 +20,12 @@ export function ClientView({ api, projectId, month }: { api: StoreApi; projectId
   const perType = workTypes.map((w) => {
     const es = monthEntries.filter((e) => e.workTypeId === w.id);
     const ms = es.reduce((acc, e) => acc + durationMs(e, now), 0);
-    return { w, ms, cost: hoursOf(ms) * CLIENT_RATE };
+    return { w, ms };
   });
   const totalMs = perType.reduce((a, x) => a + x.ms, 0);
-  const totalCost = hoursOf(totalMs) * CLIENT_RATE;
+  // 請求は月の実働合計を15分単位に丸めてから時給を乗じる（作業ごと・記録ごとには丸めない）
+  const billMs = billableMs(totalMs);
+  const totalCost = hoursOf(billMs) * CLIENT_RATE;
 
   const plans = store.plans.filter((p) => p.projectId === projectId && p.month === month);
   const wt = (id: string) => workTypes.find((w) => w.id === id);
@@ -53,18 +56,21 @@ export function ClientView({ api, projectId, month }: { api: StoreApi; projectId
           {ended && <span className="ended-badge">確定・この月は終了</span>}
         </h2>
         <div className="tiles">
-          {perType.map(({ w, ms, cost }) => (
+          {perType.map(({ w, ms }) => (
             <div className="tile" key={w.id}>
               <div className="l"><span className="wdot" style={{ background: w.kind === 'design' ? 'var(--design)' : 'var(--codeA)' }} />{w.name}</div>
               <div className="v">{fmtHM(ms)}</div>
-              <div className="s">{fmtYen(cost)}</div>
+              <div className="s">実働時間</div>
             </div>
           ))}
           <div className="tile total">
-            <div className="l">合計時間 ／ 費用</div>
-            <div className="v">{fmtHM(totalMs)}</div>
+            <div className="l">請求対象時間 ／ 費用</div>
+            <div className="v">{fmtHM(billMs)}</div>
             <div className="s">費用合計 {fmtYen(totalCost)}（{fmtYen(CLIENT_RATE)}/h）</div>
           </div>
+        </div>
+        <div className="hint">
+          ※ 費用は月の実働時間の合計（{fmtHM(totalMs)}）を{BILLING_UNIT_MIN}分単位（{BILLING_UNIT_MIN}分未満切り捨て）で計算しています。
         </div>
       </div>
 
@@ -80,7 +86,6 @@ export function ClientView({ api, projectId, month }: { api: StoreApi; projectId
                 <th>日時</th>
                 <th>作業</th>
                 <th className="r">時間</th>
-                <th className="r">費用</th>
               </tr>
             </thead>
             <tbody>
@@ -91,7 +96,6 @@ export function ClientView({ api, projectId, month }: { api: StoreApi; projectId
                     <td className="num">{fmtDateTime(e.start)}</td>
                     <td>{wt(e.workTypeId)?.name ?? '—'}</td>
                     <td className="r amt">{e.end == null ? <span className="live"><span className="pulse" />作業中</span> : fmtHM(dur)}</td>
-                    <td className="r amt">{fmtYen(hoursOf(dur) * CLIENT_RATE)}</td>
                   </tr>
                 );
               })}

@@ -7,6 +7,18 @@ import type { TimeEntry } from './types';
 export const CLIENT_RATE = 6250;
 
 /**
+ * 請求時間の計算単位（分）。業務委託基本契約 第11条2項「当該月の実働時間（15分単位で計算する。）」。
+ * 月の実働時間の合計を単位未満切り捨てで丸める（契約に端数処理の定めがないため、甲に有利な側で計算）。
+ */
+export const BILLING_UNIT_MIN = 15;
+
+/** 月の実働時間 → 請求対象時間（15分単位・切り捨て） */
+export function billableMs(ms: number): number {
+  const unit = BILLING_UNIT_MIN * 60_000;
+  return Math.floor(ms / unit) * unit;
+}
+
+/**
  * Enterで実行するハンドラ。ただし日本語IMEの変換確定Enterは無視する。
  * （変換確定のつもりのEnterで誤送信されるのを防ぐ）
  */
